@@ -45,13 +45,18 @@
         HQ-RTR:
             configure terminal
             interface isp
-            ip address 172.16.1.2/28
+             ip address 172.16.1.2/28
+            exit
+            port ge0 
+             service-instance 1
+               encapsulation untagged
+               connect ip interface isp
+             exit
             exit
             ip route 0.0.0.0/0 172.16.1.1
-            exit
             write memory
             (BR-RTR: 172.16.2.2/28, шлюз 172.16.2.1).
-            
+         
     Требование «ІР из приватного диапазона» выполнено: используются 10.0.0.0/8 и
     172.16.0.0/12 (оба приватные).
 
@@ -90,7 +95,7 @@
         usermod -aG wheel sshuser
         создаём - touch /etc/sudoers/sshuser/
         редактируем - vim /etc/sudoers.d/sshuser/
-        записываем - sshuser ALL (ALL) NOPASSWD: ALL
+        записываем - sshuser ALL=(ALL) NOPASSWD: ALL
         chmod 440 /etc/sudoers.d/sshuser
         cat /etc/sudoers.d/sshuser
         conf t
@@ -173,10 +178,9 @@
         VID=100 идентификатор VLAN.
         
     Создать файл ipv4address с IP-адресом для интерфейса enp0s3.100:
-        # echo "192.168.10.63/24" > /etc/net/ifaces/enp0s3.100/ipv4address
-        
+        # echo "10.10.100.2/27" > /etc/net/ifaces/enp0s3.100/ipv4address        
     Создать файл ipv4route с маршрутом по умолчанию для интерфейса еnp0s3.100:
-        # echo "default via 192.168.10.1" > /etc/net/ifaces/enp0s3.100/ipv4route
+        # echo "default via 10.10.100.1" > /etc/net/ifaces/enp0s3.100/ipv4route
         
     Применить изменения:
         # systemctl restart network
@@ -303,7 +307,7 @@
         exit
         interface tunnel.0
         ip ospf authentication message-digest
-        ip ospf message-digest-key 1 md5 P@ssw0rd
+        ip ospf message-digest-key 1 md5 P@ssword
         exit
         interface fw
         ip ospf authentication message-digest
@@ -512,8 +516,8 @@
         2.200.10 IN PTR hq-cli.au-team.irpo. ; 10.10.200.2
         
         ; PTR-записи для BR
-        1.20.10 IN PTR br-rtr.au-team.irpo. ; 10.20.10.1
-        2.20.10 IN PTR br-fw.au-team.irpo.  ; 10.20.10.2
+        1.10.20 IN PTR br-rtr.au-team.irpo. ; 10.20.10.1
+        2.10.20 IN PTR br-fw.au-team.irpo.  ; 10.20.10.2
         2.20.20 IN PTR br-srv.au-team.irpo. ; 10.20.20.2
         2.30.20 IN PTR br-cli.au-team.irpo. ; 10.20.30.2
         
