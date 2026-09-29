@@ -1,0 +1,689 @@
+сейчас я скину тебе решение заданий по экзамену. твоя задача в каждом ответе присылать мне по решению каждого задания,начиная с первого, покомандно и максимально понятно, чтоб я точно нигде не ошибился. не забудь указывать машины, на которых эти команды надо вводить
+
+ЗАДАНИЕ 1
+
+    Имена устройств согласно топологии полное доменное имя.
+    Имена (FQDN), домен au-team.irpo
+    
+    Alt Linux - ISP, HQ-SRV, HQ-CLI, BR-SRV, BR-CLI:
+        hostnamectl set-hostname hq-srv.au-team.irpo
+        exec bash
+        hostname # проверка →hq-srv.au-team.irpo
+        
+    EcoRouter (HQ-RTR, BR-RTR):
+        enable
+        configure terminal
+        hostname HQ-RTR
+        ip domain-name au-team.irpo
+        exit
+        wr
+        с большой или маленькой буквы?
+        (на BR-RTR
+        hostname BR-RTR).
+        
+    Ideco (BR-FW): веб-интерфейс «Настройки Общие» (или мастер первичной
+    настройки)  имя узла br-fw.au-team.irpo.
+    
+    Адресация IPv4:
+        Alt Linux - через /etc/net/ifaces/<iface>/. Имя интерфейса: ip -br a.
+        
+        /etc/net/ifaces/<iface>/options:
+            TYPE-eth
+            BOOTPROTO static
+            CONFIG_WIRELESS=no
+            SYSTEMD_CONTROL=yes
+            CONFIG_IPV4=yes
+            DISABLED=no
+            
+        /etc/net/ifaces/<iface>/ipv4address: 10.10.100.2/27
+        /etc/net/ifaces/<iface>/ipv4route (шлюз по умолчанию): default via 10.10.100.1
+        
+        HQ-SRV: 10.10.100.2/27, шлюз 10.10.100.1.
+        BR-SRV: 10.20.20.2/28, шлюз 10.20.20.1.
+        BR-CLI: 10.20.30.2/29, шлюз 10.20.30.1.
+        HQ-CLI: адрес по DHCP (задание 9) — статику не задаём.
+        
+    EcoRouter (uplink к ISP) детально IP на VLAN-интерфейсах в задании 4; здесь uplink:
+        HQ-RTR:
+            configure terminal
+            interface isp
+             ip address 172.16.1.2/28
+            exit
+            port ge0 
+             service-instance 1
+               encapsulation untagged
+               connect ip interface isp
+             exit
+            exit
+            ip route 0.0.0.0/0 172.16.1.1
+            write memory
+            (BR-RTR: 172.16.2.2/28, шлюз 172.16.2.1).
+         
+    Требование «ІР из приватного диапазона» выполнено: используются 10.0.0.0/8 и
+    172.16.0.0/12 (оба приватные).
+
+
+ЗАДАНИЕ 2
+
+    Настройте доступ к сети Интернет на маршрутизаторе ISP:
+    Три интерфейса: WAN (к провайдеру, DHCP), к HQ-RTR (172.16.1.1/28), к BR-RTR (172.16.2.1/28).
+    
+    --WAN - DHCP. /etc/net/ifaces/<wan>/options: BOOTPROTO dhcp.--
+    K HQ-RTR: /etc/net/ifaces/<hq>/ipv4address → 172.16.1.1/28.
+    K BR-RTR: /etc/net/ifaces/<br>/ipv4address → 172.16.2.1/28.
+    Маршрут по умолчанию приходит по DHCP автоматически.
+    
+    Включить форвардинг:
+        nano /etc/net/sysctl.conf -> net.ipv4.ip_forward $=1$
+        sysctl -p применить изменения
+        sysctl net.ipv4.ip_forward $\#=1$
+        apt-get update
+        apt-get install iptables
+        iptables -t nat -A POSTROUTING -s 172.16.1.0/28 -o ens3 -j MASQUERADE
+        iptables -t nat -A POSTROUTING -s 172.16.2.0/28 -o ens3 -j MASQUERADE
+        iptables-save > /etc/sysconfig/iptables
+        systemctl enable --now iptables
+
+
+ЗАДАНИЕ 3
+
+    Создайте локальные учетные записи на серверах HQ-SRV и BR-SRV:
+    sshuser на HQ-SRV и BR-SRV (Alt Linux), UID 2026, sudo без пароля
+    
+        useradd -u 2026 sshuser
+        cat /etc/passwd | grep sshuser # проверка наличия
+        passwd sshuser # ввести P@ssword дважды
+        id -u sshuser # проверка UID → 2026
+        usermod -aG wheel sshuser
+        создаём - touch /etc/sudoers/sshuser/
+        редактируем - vim /etc/sudoers.d/sshuser/
+        записываем - sshuser ALL=(ALL) NOPASSWD: ALL
+        chmod 440 /etc/sudoers.d/sshuser
+        cat /etc/sudoers.d/sshuser
+        conf t
+        
+    Создайте пользователя net_admin на HQ-RTR и BR-RTR.
+    Пароль пользователя net_admin P@ssword.
+    
+        username net_admin
+        password Password
+        role admin (максимальные привилегии)
+        exit
+        exit
+        wr
+        show users localdb
+
+
+ЗАДАНИЕ 4
+
+    Настройте коммутацию в сегменте HQ следующим образом:
+    Трафик HQ-SRV - VLAN 100.
+    Трафик HQ-CLI - VLAN 200.
+    Предусмотреть возможность передачи трафика в VLAN 999.
+    Реализовать на HQ-RTR маршрутизацию трафика всех указанных VLAN с
+    использованием одного сетевого адаптера ВМ/физического порта.
+    
+    Создаём 13-интерфейсы и адреса:
+        configure terminal
+        interface v1100
+        ip address 10.10.100.1/27
+        exit
+        interface v1200
+        ip address 10.10.200.1/28
+        exit
+        interface v1999
+        ip address 10.10.30.1/29
+        exit
+        
+    На физическом порту создаём сабинтерфейсы с dot1q и привязываем к 13-интерфейсам:
+        show port brief
+        port gel
+        service-instance 100
+        encapsulation dot1q 100
+        rewrite pop 1
+        connect ip interface v1100
+        
+    1 вариант:
+        exit
+        service-instance 200
+        encapsulation dot1q 200
+        rewrite pop 1
+        connect ip interface v1200
+        exit
+        service-instance 999
+        encapsulation dot1q 999
+        rewrite pop 1
+        connect ip interface v1999
+        exit
+        exit
+        exit
+        write memory
+        
+    Проверка:
+        show interface brief
+        show service-instance port gel
+        проверить связность между HQ-SRV и HQ-RTR: ping 10.10.100.1
+        mkdir /etc/net/ifaces/enp0s3.100
+        
+    Создать файл options:
+        # cat <<EOF > /etc/net/ifaces/enp0s3.100/options
+        BOOTPROTO=static
+        CONFIG_WIRELESS=no
+        CONFIG_IPV4=yes
+        HOST=enp0s3
+        ONBOOT=yes
+        TYPE=vlan
+        VID=100
+        EOF
+        где:
+        HOST=enp0s3  указывает физический интерфейс;
+        VID=100 идентификатор VLAN.
+        
+    Создать файл ipv4address с IP-адресом для интерфейса enp0s3.100:
+        # echo "10.10.100.2/27" > /etc/net/ifaces/enp0s3.100/ipv4address        
+    Создать файл ipv4route с маршрутом по умолчанию для интерфейса еnp0s3.100:
+        # echo "default via 10.10.100.1" > /etc/net/ifaces/enp0s3.100/ipv4route
+        
+    Применить изменения:
+        # systemctl restart network
+        
+    2 вариант:
+        Bridge:
+        vmbr103
+        VLAN Tag:
+        100
+
+
+ЗАДАНИЕ 5
+
+    Настройте безопасный удаленный доступ на HQ-SRV и BR-SRV
+    Ограничьте количество попыток входа до двух.
+    Настройте баннер «Authorized access only».
+    
+    vim /etc/openssh/sshd_config:
+        port 2024 - если требует задание
+        AllowUsers sshuser только этому пользователю
+        MaxAuth Tries 2
+        PasswordAuthentication yes - допускать аутентификацию по паролю;
+        Banner /etc/openssh/banner
+        содержимое указанного файла будет отправлено
+        удаленному пользователю прежде, чем будет разрешена аутентификация.
+        
+    Редактируем файл:
+        Vim /etc/openssh/banner
+        добавляем в него следующее содержимое:
+        Authorized access only.
+        
+    Для применения всех изменений необходимо перезапустить службу sshd:
+        systemctl restart sshd
+        
+    Проверка с клиента: 
+        при подключении выводится баннер;
+        после 2 неудачных попыток
+        ssh sshuser@10.10.100.2
+        отказ.
+
+
+ЗАДАНИЕ 6
+
+    Между офисами HQ и BR на маршрутизаторах HQ-RTR и BR-RTR необходимо
+    сконфигурировать туннель
+    На выбор технология GRE.
+    В качестве сетевого диапазона используйте сеть 10.10.10.0/24.
+    Для туннеля используйте минимально возможную маску.
+    Сеть 10.10.10.0/24, минимальная маска для точки-точки  /30.
+    Источник/назначение туннеля внешние адреса роутеров.
+    
+    HQ-RTR:
+        configure terminal
+        interface tunnel.0
+        --необязательно description "GRE"
+        ip address 10.10.10.1/30
+        ip tunnel 172.16.1.2 172.16.2.2 mode gre
+        exit
+        exit
+        write memory
+        
+    BR-RTR:
+        configure terminal
+        interface tunnel.0
+        description "GRE"
+        ip address 10.10.10.2/30
+        ip tunnel 172.16.2.2 172.16.1.2 mode gre
+        exit
+        exit
+        write memory
+        
+    Проверка:
+        show interface tunnel.0
+        # Tunnel mode: GRE, line protocol up
+        ping 10.10.10.2 #c HQ-RTR
+        
+    Маршрут по умолчанию к ISP (задание 1) обязателен иначе внешние адреса
+    концов туннеля недостижимы.
+
+
+ЗАДАНИЕ 7
+
+    Обеспечьте динамическую маршрутизацию на маршрутизаторах HQ-RTR и BR-RTR
+    и межсетевом экране BR-FW:
+    сети одного офиса должны быть доступны из другого офиса и наоборот.
+    Разрешите выбранный протокол только на интерфейсах туннеля.
+    Используйте OSPF для маршрутизации.
+    Маршрутизаторы должны делиться маршрутами только друг с другом.
+    Используйте аутентификацию в OSPF.
+    В качестве пароля используйте P@ssword.
+    Пароль должен передаваться с использованием хешированного ключа MD5.
+    
+    OSPF только на туннеле (и стыке с BR-FW), обмен маршрутами только между
+    роутерами, аутентификация MD5, ключ P@ssword. Реализация «только друг с другом» —
+    через passive-interface default + точечное no passive-interface.
+    
+    HQ-RTR:
+        configure terminal
+        router ospf 1
+        ospf router-id 10.10.10.1
+        passive-interface default
+        no passive-interface tunnel.0
+        network 10.10.100.0/27 area 0
+        network 10.10.200.0/28 area 0
+        network 10.10.30.0/29 area 0
+        network 10.10.10.0/30 area 0
+        exit
+        interface tunnel.0
+        ip ospf authentication message-digest
+        ip ospf message-digest-key 1 md5 P@ssword
+        exit
+        exit
+        write memory
+        
+    BR-RTR (стыки: tunnel.0 к HQ, fw к BR-FW в сети 10.20.10.0/30):
+        configure terminal
+        router ospf 1
+        ospf router-id 10.10.10.2
+        passive-interface default
+        no passive-interface tunnel.0
+        no passive-interface fw
+        network 10.10.10.0/30 area 0
+        network 10.20.10.0/30 area 0
+        exit
+        interface tunnel.0
+        ip ospf authentication message-digest
+        ip ospf message-digest-key 1 md5 P@ssword
+        exit
+        interface fw
+        ip ospf authentication message-digest
+        ip ospf message-digest-key 1 md5 P@ssword
+        exit
+        exit
+        write memory
+        
+    BR-FW (Ideco), веб-интерфейс  Маршрутизация → OSPF:
+        включить OSPF; задать аутентификацию соседей MD5, ключ P@ssword;
+        добавить локальный интерфейс в сторону BR-RTR (сеть 10.20.10.0/30, area 0);
+        анонсировать локальные сети 10.20.20.0/28 и 10.20.30.0/29 (area 0);
+        убедиться, что OSPF активен только на интерфейсе к BR-RTR (не на LAN).
+        
+    Проверка на ЕcoRouter:
+        show ip ospf neighbor # соседи в состоянии Full
+        show ip route ospf # чужие сети помечены 'О'
+        
+    Контроль: 
+        с HQ-SRV пингуется BR-SRV и наоборот.
+
+
+ЗАДАНИЕ 8
+
+    Настройка динамической трансляции адресов на маршрутизаторах HQ-RTR и BR-RTR
+    Настройте динамическую трансляцию адресов (NAT) для обоих офисов в сторону ISP. Все
+    устройства в офисах должны иметь доступ к сети Интернет.
+    
+    HQ-RTR:
+        configure terminal
+        interface isp
+        ip nat outside
+        exit
+        interface v1100
+        ip nat inside
+        exit
+        interface v1200
+        ip nat inside
+        exit
+        interface v1999
+        ip nat inside
+        exit
+        ip nat pool INTERNET 10.10.100.1-10.10.100.32, 10.10.200.1-10.10.200.16, 10.10.30.1-10.10.30.8 -- выделено 32 адреса, 26, 8 и.т.д (согласно заданию 1)
+        ip nat source dynamic inside-to-outside pool INTERNET overload interface isp
+        exit
+        write memory
+        
+    BR-RTR (внутренний стык fw):
+        configure terminal
+        interface isp
+        ip nat outside
+        exit
+        interface fw
+        ip nat inside
+        ip address 10.20.10.1/30
+        port gel
+        service instance 1
+        encapsulation untagged
+        connect ip interface fw
+        exit
+        (config) ip nat pool INTERNET 10.20.10.1-10.20.10.2, 10.20.20.1-10.20.20.14.10.20.30.1-10.20.30.6
+        (config) ip nat source dynamic inside-to-outside pool INTERNET overload interface isp
+        exit
+        write memory
+
+
+ЗАДАНИЕ 9
+
+    Настройте протокол динамической конфигурации хостов (DHCP) для сети в сторону HQ-CLI:
+    Настройте нужную подсеть.
+    В качестве сервера DHCP выступает маршрутизатор HQ-RTR.
+    Клиентом является машина HQ-CLI.
+    Исключите из выдачи адрес маршрутизатора.
+    Адрес шлюза по умолчанию адрес маршрутизатора HQ-RTR.
+    Адрес DNS-сервера для машины HQ-CLI адрес сервера HQ-SRV.
+    DNS-суффикс  au-team.irpo.
+    Сведения о настройке протокола занесите в отчёт.
+    
+    На HQ-RTR (синтаксис DHСР-сервера EcoRouter; точные ключи сверьте на устройстве через ?):
+        ip pool HQ-Clients 10.10.200.2-10.10.200.14
+        dhcp-server 1
+        pool HQ-Clients 1
+        mask 255.255.255.240
+        gateway 10.10.200.1
+        dns 10.10.100.2
+        domain-name au-team.irpo
+        exit
+        exit
+        interface v1200
+        dhcp-server 1
+        exit
+        write memory
+        
+    Параметры по заданию:
+        сервер DHCP — HQ-RTR; клиент — HQ-CLI;
+        из выдачи исключён адрес маршрутизатора 10.10.200.1;
+        шлюз по умолчанию 10.10.200.1 (HQ-RTR);
+        DNS-сервер 10.10.100.2 (HQ-SRV);
+        DNS-суффикс - au-team.irpo.
+        
+    Проверка: 
+        show dhcp-server 1 detailed
+        
+    Ha HQ-CLI (Alt Linux)
+        nmcli connection show
+        получение по DHCP (nmcli):
+        nmcli connection delete uuid <uuid_статического_подключения> # если есть
+        nmcli connection add ifname ens3 type ethernet autoconnect yes con-name dhep ipv4.method auto
+        nmcli connection up dhcp
+        cat /etc/resolv.conf # DNS 10.10.100.2, search au-team.irpo
+        
+    Если на стенде используется отдельный коммутатор между HQ-RTR и HQ-CLI,
+    убедитесь, что порт к HQ-CLI находится в access VLAN 200, иначе DHCР-запросы не
+    дойдут до сабинтерфейса ѵ1200.
+    
+    В отчёт: конфигурация пула и вывод полученного адреса на HQ-CLI.
+
+
+ЗАДАНИЕ 10
+
+    Настройте пользователей на межсетевом экране BR-FW
+    Создайте пользователей mgmt и srv.
+    Настройте ІР-авторизацию пользователя srv для устройства BR-SRV.
+    Настройте МАС-авторизацию пользователя mgmt для устройства SRV (возможно, опечатка, должно быть BR-FW или другое устройство).
+    
+    1. Создать пользователей mgmt и srv (Пользователи Добавить пользователя).
+    2. ІР-авторизация srv под BR-SRV: открыть пользователя srv → Способ авторизации → По ІР-адресу → указать IP BR-SRV 10.20.20.2. Сохранить.
+    3. МАС-авторизация mgmt под устройство SRV: открыть mgmt → Способ авторизации По МАС-адресу указать МАС соответствующего устройства. Сохранить.
+    
+    После сохранения трафик с указанного ІР/МАС автоматически сопоставляется с
+    пользователем это используется в правилах доступа и учёте. МАС берётся командой ір
+    link / ip -br link на нужной машине.
+
+
+ЗАДАНИЕ 11
+
+    Настройте инфраструктуру разрешения доменных имён для офисов HQ и BR:
+    Основной DNS-сервер реализован на HQ-SRV.
+    Сервер должен обеспечивать разрешение имён в сетевые адреса устройств и обратно в соответствии с таблицей 3.
+    В качестве DNS-сервера пересылки (forwarder) используйте любой общедоступный DNS-сервер (77.88.8.7, 77.88.8.3 или другие).
+    Прямое и обратное разрешение по таблице, форвардер на публичный DNS (77.88.8.7/77.88.8.3).
+    
+    Установка:
+        apt-get update
+        apt-get install bind
+        
+    редактирование конфигурационного файла /var/lib/bind/etc/options.conf:
+        listen-on { 127.0.0.1; 10.10.100.2; };
+        listen-on-v6 { none; };
+        forwarders {77.88.8.8; }; (либо вузовский 94.232.137.94)
+        allow-query { any; };
+        recursion yes; (не факт, что нужно)
+        
+    vim /var/lib/bind/etc/rfc1912.conf
+        zone "au-team.irpo" {
+            type master;
+            file "au-team.irpo";
+        };
+        zone "10.in-addr.arpa" {
+            type master;
+            file "10.in-addr.arpa";
+        };
+        
+    файлы зон создаются копированием шаблона:
+        cd /var/lib/bind/etc/zone/
+        cp empty au-team.irpo
+        cp empty 10.in-addr.arpa
+        
+    Необходимо сконфигурировать файл au-team.irpo, который является прямой зоной, следующим образом:
+        vim au-team.irpo
+        $TTL 1D
+        @ IN SOA hq-srv.au-team.irpo. root.au-team.irpo. (
+            2026061701 ; serial
+            12H ; refresh
+            1H ; retry
+            1W ; expire
+            1H) ; minimum
+            
+        @ IN NS hq-srv.au-team.irpo.
+        hq-srv IN A 10.10.100.2
+        hq-cli IN A 10.10.200.2
+        hq-rtr IN A 10.10.100.1
+        hq-rtr IN A 10.10.200.1
+        hq-rtr IN A 10.10.30.1 --(влан 999)
+        br-rtr IN A 10.20.10.1
+        br-fw IN A 10.20.10.2
+        br-srv IN A 10.20.20.2
+        br-cli IN A 10.20.30.2
+        docker IN A 172.16.1.1
+        web IN A 172.16.2.1
+        
+    Обратная зона 10.in-addr.arpa (восстановленная структура таблицы):
+        $TTL 1D
+        @ IN SOA hq-srv.au-team.irpo. root.au-team.irpo. (
+            2026061701 ; serial
+            12H ; refresh
+            1H ; retry
+            1W ; expire
+            1H ) ; ncache
+            
+        @ IN NS hq-srv.au-team.irpo.
+        
+        ; PTR-записи для HQ
+        1.100.10 IN PTR hq-rtr.au-team.irpo. ; 10.10.100.1
+        2.100.10 IN PTR hq-srv.au-team.irpo. ; 10.10.100.2
+        2.200.10 IN PTR hq-cli.au-team.irpo. ; 10.10.200.2
+        
+        ; PTR-записи для BR
+        1.10.20 IN PTR br-rtr.au-team.irpo. ; 10.20.10.1
+        2.10.20 IN PTR br-fw.au-team.irpo.  ; 10.20.10.2
+        2.20.20 IN PTR br-srv.au-team.irpo. ; 10.20.20.2
+        2.30.20 IN PTR br-cli.au-team.irpo. ; 10.20.30.2
+        
+    Ключ rndc (обязательный шаг на «Альт»)
+        rndc-confgen > /var/lib/bind/etc/rndc.key
+        sed -i '6,$d'/var/lib/bind/etc/rndc.key
+        Без этого служба может не подняться.
+        
+    Права и проверка конфигурации
+        chgrp -R named /var/lib/bind/etc/zone/
+        named-checkconf # проверка синтаксиса конфигов $(THXO=oK)$
+        named-checkconf-z # проверка зон: должны загрузиться au-team.irpo и три in-addr.arpa
+        
+    Запуск:
+        systemctl enable --now bind
+        systemctl restart bind
+        systemctl status bind
+        
+    На всех клиентах (HQ-CLI, BR-SRV, BR-CLI) в файле /etc/resolv.conf укажите:
+        search au-team.irpo
+        nameserver 10.10.100.2
+        
+    Прямой запрос (А-запись): 
+        nslookup hq-srv.au-team.irpo 10.10.100.2
+        Ожидаемый вывод:
+            Server: 10.10.100.2
+            Address: 10.10.100.2#53
+            Name: hq-srv.au-team.irpo
+            Address: 10.10.100.2
+            
+    Запрос к внешнему домену (проверка forwarders): 
+        nslookup ya.ru 10.10.100.2
+        
+    Проверка PTR: 
+        nslookup 10.10.100.2 10.10.100.2
+        Ожидаемый вывод: 2.100.10.in-addr.arpa name = hq-srv.au-team.irpo.
+
+
+ЗАДАНИЕ 12
+
+    Настройте часовой пояс регион Москва (Europe/Moscow) на всех устройствах (за
+    исключением виртуального коммутатора, в случае его использования).
+    
+    Alt Linux (все):
+        timedatectl set-timezone Europe/Moscow
+        timedatectl
+        
+    EcoRouter (HQ-RTR, BR-RTR):
+        configure terminal
+        ntp timezone utc+3
+        exit
+        show ntp timezone # System Time zone: Europe/Moscow
+        write memory
+        
+    Ideco (BR-FW): веб-интерфейс
+        Настройки
+        Дата и время часовой пояс
+        Europe/Moscow (UTC+3).
+
+
+ИТОГОВЫЙ ЧЕК-ЛИСТ ПРОВЕРКИ
+
+    1. hostname -f на всех Alt Linux → FQDN в зоне au-team.irpo; на EcoRouter - корректный hostname/domain.
+    2. Пинг внутри каждого офиса (шлюзы, серверы, клиенты).
+    3. show ip ospf neighbor → Full; show ip route ospf  чужие сети как О.
+    4. Пинг между офисами: HQ-SRV  BR-SRV (через GRE+OSPF).
+    5. Выход в Интернет с HQ-CLI и BR-CLI (PАТ на ISP и роутерах).
+    6. HQ-CLI получает по DHCP адрес/шлюз/DNS/суффикс (адрес роутера исключён).
+    7. SSH на HQ-SRV/BR-SRV: баннер «Authorized access only», лимит 2 попытки, sshuser → sudo без пароля.
+    8. nslookup прямого и обратного разрешения по таблице 2; внешние имена резолвятся через форвардер.
+    9. На BR-FW: пользователи mgmt/srv, IP-авторизация srv BR-SRV, МАС-авторизация mgmt.
+    10. Время/часовой пояс Москва на всех устройствах.
+
+
+НАСТРОЙКА ФАЕРВОЛЛА
+
+    Перейдите в веб-интерфейс Ideco NGFW (IDC-FW) в раздел «Сетевые интерфейсы» и
+    настройте три интерфейса согласно новой топологии.
+    
+    WAN интерфейс (Внешний):
+        Выберите интерфейс, который смотрит в сторону Ek Router (например, eth0 или vmbr0).
+        Режим: Статический ІР.
+        ІР-адрес: 10.20.10.2.
+        Маска подсети: 255.255.255.0 (или /24).
+        Шлюз по умолчанию: 10.20.10.1 (это ІР-адрес Ek Router).
+        DNS-серверы: Укажите работающие DNS. Можно использовать 8.8.8.8 и 94.232.137.104 (вузовский) для резерва.
+        Нажмите «Сохранить».
+        
+    LAN интерфейс (Внутренний для клиентов):
+        Выберите интерфейс для локальной сети (например, eth1 или vmbr1).
+        Режим: Статический ІР.
+        ІР-адрес: 10.20.20.1.
+        Маска подсети: 255.255.255.0 (/24).
+        Нажмите «Сохранить».
+        
+    DMZ интерфейс (Внутренний для серверов):
+        Выберите интерфейс для демилитаризованной зоны (например, eth2 или vmbr2).
+        Режим: Статический ІР.
+        ІР-адрес: 10.20.30.1.
+        Маска подсети: 255.255.255.0 (/24).
+        Нажмите «Сохранить».
+        
+    Настройка правил файрвола (FORWARD)
+        Чтобы клиенты из LAN и DMZ могли выходить в интернет через WAN, необходимо
+        разрешить прохождение трафика между этими зонами. Перейдите в раздел
+        «Правила трафика» -> «Файрвол» -> вкладка «FORWARD».
+        
+        Создайте правило для LAN:
+            Нажмите «Добавить».
+            Действие: Разрешить.
+            Источник: Выберите зону LAN (или укажите сеть 10.20.20.0/24).
+            Назначение: Выберите зону WAN (или укажите любой адрес, Any).
+            Нажмите «Сохранить».
+            
+        Создайте правило для DMZ:
+            Нажмите «Добавить».
+            Действие: Разрешить.
+            Источник: Выберите зону DMZ (или укажите сеть 10.20.30.0/24).
+            Назначение: Выберите зону WAN.
+            Нажмите «Сохранить».
+            
+    Настройка SNAT (Source Network Address Translation)
+        Перейдите в раздел «Правила трафика» -> «Файрвол» -> вкладка «SNAT».
+        Нажмите «Добавить».
+        Действие: SNAT (или Маскарадинг).
+        Источник: Выберите обе зоны LAN и DMZ (удерживайте Ctrl для выбора
+        нескольких). Либо укажите диапазон сетей 10.20.20.0/24 и 10.20.30.0/24.
+        Назначение: WAN (или любой адрес).
+        Тип трансляции: Выберите «Маскарадинг» (это автоматически подставит ІР вашего
+        WAN-интерфейса).
+        Нажмите «Сохранить».
+        
+    Настройка DNS на клиентах
+        Чтобы клиенты могли разрешать доменные имена в IP-адреса, на них нужно прописать
+        DNS-сервера.
+        На клиентах (IDC-ADMIN, IDC-DC):
+        В настройках сети укажите DNS-серверы, например, 8.8.8.8 и 94.232.137.104.
+        Если клиенты получают ІР-адреса по DHCPР от файрволла, то DNS нужно указать в
+        настройках DHCP-сервера на IDC-FW. Так как по условию у нас статика, просто
+        пропишите DNS вручную на самих клиентских машинах.
+        
+        Или можно прописать DNS глобально на самом файрволле IDC-FW, и тогда он будет
+        выступать в роли DNS-ретранслятора (forwarder). Для этого в разделе «Управление
+        сервером» -> «Настройки» укажите те же DNS (8.8.8.8, 94.232.137.104), а на клиентах в
+        качестве DNS-сервера укажите ІР-адрес самого файрволла (10.20.20.1 для LAN и
+        10.20.30.1 для DMZ).
+        
+        Зайдите в веб-интерфейс файрволла, в раздел «Диагностика» -> «Ping».
+        Попробуйте пропинговать внешний ІР-адрес, например, 8.8.8.8.
+        Попробуйте пропинговать доменное имя, например, yandex.ru.
+        
+    !СОЗДАНИЕ ПОЛЬЗОВАТЕЛЯ
+        Перейдите в раздел «Пользователи» -> «Учетные записи».
+        Нажмите «Добавить».
+        Создайте пользователя, например, с именем network (или lan-users, dmz-users неважно).
+        Пароль P@ssw0rd1234
+        Нажмите «Сохранить».
+        
+        Можно создать одного пользователя для всех подсетей или разных для LAN и DMZ. Для
+        простоты сделаем одного общего пользователя network.
+        
+        Перейдите в раздел «Пользователи» -> «Авторизация» Авторизация по подсетям
+        Добавить Добавляем подсеть и пользователя в правила:
+        
+        Подсеть            Пользователь
+        192.168.100.0/24   network
+        10.0.10.0/24       network
